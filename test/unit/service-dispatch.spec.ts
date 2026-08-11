@@ -151,3 +151,138 @@ describe('PaymentService dispatch', () => {
     expect(new PaymentService().registered).toEqual([]);
   });
 });
+
+describe('PaymentService refund dispatch', () => {
+  const refundResult = {
+    gateway: 'stripe',
+    refundId: 're_1',
+    amount: 5,
+    currency: 'USD',
+    status: 'succeeded' as const,
+  };
+
+  function refundGateway() {
+    return fakeGateway('stripe', ['refund'], {
+      refund: jest.fn().mockResolvedValue(refundResult),
+    });
+  }
+
+  it('rejects a gateway that cannot refund', async () => {
+    const service = new PaymentService({ gateways: [fakeGateway('paypal', [])] });
+
+    await expect(
+      service.refund('paypal', { transactionId: 't', currency: 'USD' }),
+    ).rejects.toBeInstanceOf(UnsupportedOperationError);
+  });
+
+  it('returns the refund and emits refund.created', async () => {
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const service = new PaymentService({ gateways: [refundGateway()], publisher: { publish } });
+
+    await expect(
+      service.refund('stripe', { transactionId: 't', currency: 'USD' }),
+    ).resolves.toEqual(refundResult);
+    expect(publish).toHaveBeenCalledWith({
+      name: 'refund.created',
+      gateway: 'stripe',
+      refundId: 're_1',
+    });
+  });
+});
+
+describe('PaymentService webhook dispatch', () => {
+  const event = {
+    gateway: 'stripe',
+    type: 'checkout.session.completed',
+    id: 'evt_1',
+    payload: {},
+  };
+
+  it('rejects a gateway that cannot verify webhooks', async () => {
+    const service = new PaymentService({ gateways: [fakeGateway('paypal', [])] });
+
+    await expect(
+      service.verifyWebhook('paypal', { rawBody: '{}', headers: {} }),
+    ).rejects.toBeInstanceOf(UnsupportedOperationError);
+  });
+
+  it('returns the event and emits webhook.verified', async () => {
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const service = new PaymentService({
+      gateways: [
+        fakeGateway('stripe', ['webhooks'], {
+          verifyWebhook: jest.fn().mockResolvedValue(event),
+        }),
+      ],
+      publisher: { publish },
+    });
+
+    await expect(service.verifyWebhook('stripe', { rawBody: '{}', headers: {} })).resolves.toEqual(
+      event,
+    );
+    expect(publish).toHaveBeenCalledWith({
+      name: 'webhook.verified',
+      gateway: 'stripe',
+      type: 'checkout.session.completed',
+      id: 'evt_1',
+    });
+  });
+
+  it('emits webhook.rejected and rethrows when verification fails', async () => {
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const service = new PaymentService({
+      gateways: [
+        fakeGateway('stripe', ['webhooks'], {
+          verifyWebhook: jest.fn().mockRejectedValue(new Error('bad signature')),
+        }),
+      ],
+      publisher: { publish },
+    });
+
+    await expect(service.verifyWebhook('stripe', { rawBody: '{}', headers: {} })).rejects.toThrow(
+      'bad signature',
+    );
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'webhook.rejected', reason: 'bad signature' }),
+    );
+  });
+
+  it('emits payment.failed for a capture that did not settle', async () => {
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const service = new PaymentService({
+      gateways: [
+        fakeGateway('stripe', ['checkout'], {
+          checkout: jest.fn(),
+          capture: jest
+            .fn()
+            .mockResolvedValue({ status: 'pending', gateway: 'stripe', sessionId: 'cs_1' }),
+        }),
+      ],
+      publisher: { publish },
+    });
+
+    await service.capture('stripe', { sessionId: 'cs_1' });
+
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'payment.failed', reason: 'pending' }),
+    );
+  });
+
+  it('reports a non-Error rejection without crashing', async () => {
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const service = new PaymentService({
+      gateways: [
+        fakeGateway('stripe', ['checkout'], {
+          checkout: jest.fn().mockRejectedValue('a bare string'),
+          capture: jest.fn(),
+        }),
+      ],
+      publisher: { publish },
+    });
+
+    await expect(service.checkout('stripe', request)).rejects.toBe('a bare string');
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'checkout.failed', error: 'unknown error' }),
+    );
+  });
+});
