@@ -61,6 +61,11 @@ against Stripe and PayPal.
   billing data back.
 - Configuration is validated before any network call, so a missing `webhookId` fails
   immediately rather than after a wasted token exchange.
+- Missing identifiers, currencies and amounts raise a `GatewayError` rather than being
+  substituted. An empty webhook event id would silently collapse every event into one
+  and defeat the idempotency the README asks applications to implement.
+- `capture()` is idempotent on both gateways: PayPal's already-captured response is
+  detected by its structured `issue` field and the existing capture is read back.
 
 ### Requirements
 

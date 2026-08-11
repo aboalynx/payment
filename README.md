@@ -146,6 +146,17 @@ if (payments.supports('paypal', 'refund')) {
 | `platform`       | onboarding, OAuth, account status | planned |         planned         |
 | `tax`            | tax calculation                   | planned | not supported by PayPal |
 
+### capture() is idempotent on both gateways
+
+Calling `capture()` twice for the same session is safe. That takes work to be true:
+Stripe's equivalent is a status read that can be repeated freely, while PayPal's
+`captureOrder` moves money and rejects a second call with `ORDER_ALREADY_CAPTURED`. The
+PayPal gateway catches exactly that and reads the existing capture back, so the same call
+means the same thing regardless of provider.
+
+This matters for webhook handlers, which providers retry. A duplicate delivery that
+reaches `capture()` will not double-charge or throw.
+
 ## Money
 
 Amounts cross the public API in **major units** — `49.99`, not `4999`. Each gateway
