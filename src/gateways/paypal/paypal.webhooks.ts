@@ -1,4 +1,4 @@
-import { ConfigurationError, WebhookVerificationError } from '../../errors';
+import { ConfigurationError, GatewayError, WebhookVerificationError } from '../../errors';
 import type { WebhookEvent, WebhookRequest } from '../../types';
 import { paypalApiBase, type PaypalOptions } from './paypal.options';
 
@@ -71,11 +71,11 @@ export async function verifyPaypalWebhook(
     },
   );
 
+  // A non-2xx here means the call itself failed - bad credentials, rate limit, outage -
+  // which is categorically different from PayPal telling us the signature is invalid.
+  // GatewayError carries the status so the caller can retry a 401 with a fresh token.
   if (!response.ok) {
-    throw new WebhookVerificationError(
-      GATEWAY_ID,
-      `verification call failed (HTTP ${response.status})`,
-    );
+    throw new GatewayError(GATEWAY_ID, 'webhook verification call failed', response.status);
   }
 
   const outcome = (await response.json()) as { verification_status?: string };

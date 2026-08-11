@@ -1,5 +1,5 @@
 import nock from 'nock';
-import { ConfigurationError, WebhookVerificationError } from '../../../src/errors';
+import { ConfigurationError, GatewayError, WebhookVerificationError } from '../../../src/errors';
 import { createPaypalGateway } from '../../../src/gateways/paypal/paypal.gateway';
 
 const API = 'https://api-m.sandbox.paypal.com';
@@ -196,5 +196,57 @@ describe('paypal token caching', () => {
         headers,
       }),
     ).rejects.toThrow(/no id/);
+  });
+});
+
+describe('paypal token invalidation', () => {
+  const ok = { verification_status: 'SUCCESS' };
+
+  // A cached token can be revoked before it expires, or its credentials rotated.
+  // Without invalidation, verification keeps failing until the cached expiry passes.
+  it('clears a rejected token and retries once with a fresh one', async () => {
+    nock(API)
+      .post('/v1/oauth2/token')
+      .reply(200, { access_token: 'stale', token_type: 'Bearer', expires_in: 32400 });
+    nock(API).post('/v1/notifications/verify-webhook-signature').reply(401, {});
+    nock(API)
+      .post('/v1/oauth2/token')
+      .reply(200, { access_token: 'fresh', token_type: 'Bearer', expires_in: 32400 });
+    nock(API).post('/v1/notifications/verify-webhook-signature').reply(200, ok);
+
+    const event = await gateway().verifyWebhook({ rawBody: body, headers });
+
+    expect(event.id).toBe('WH-1');
+    expect(nock.isDone()).toBe(true);
+  });
+
+  it('retries only once, so bad credentials still fail fast', async () => {
+    nock(API)
+      .post('/v1/oauth2/token')
+      .twice()
+      .reply(200, { access_token: 'tok', token_type: 'Bearer', expires_in: 32400 });
+    nock(API).post('/v1/notifications/verify-webhook-signature').twice().reply(401, {});
+
+    await expect(gateway().verifyWebhook({ rawBody: body, headers })).rejects.toBeInstanceOf(
+      GatewayError,
+    );
+    expect(nock.isDone()).toBe(true);
+  });
+
+  // A rejected signature is not an auth problem and must not trigger a token retry.
+  it('does not retry when PayPal reports the signature invalid', async () => {
+    nock(API)
+      .post('/v1/oauth2/token')
+      .once()
+      .reply(200, { access_token: 'tok', token_type: 'Bearer', expires_in: 32400 });
+    nock(API)
+      .post('/v1/notifications/verify-webhook-signature')
+      .once()
+      .reply(200, { verification_status: 'FAILURE' });
+
+    await expect(gateway().verifyWebhook({ rawBody: body, headers })).rejects.toBeInstanceOf(
+      WebhookVerificationError,
+    );
+    expect(nock.isDone()).toBe(true);
   });
 });

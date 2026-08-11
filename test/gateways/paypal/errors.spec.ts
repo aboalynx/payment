@@ -1,5 +1,5 @@
 import nock from 'nock';
-import { ConfigurationError, GatewayError, WebhookVerificationError } from '../../../src/errors';
+import { ConfigurationError, GatewayError } from '../../../src/errors';
 import { createPaypalGateway } from '../../../src/gateways/paypal/paypal.gateway';
 import { paypalApiBase } from '../../../src/gateways/paypal/paypal.options';
 import { verifyPaypalWebhook } from '../../../src/gateways/paypal/paypal.webhooks';
@@ -78,8 +78,10 @@ describe('paypal webhook verification failures', () => {
     nock(SANDBOX).post('/v1/oauth2/token').reply(200, { access_token: 'tok', expires_in: 32400 });
     nock(SANDBOX).post('/v1/notifications/verify-webhook-signature').reply(500, {});
 
+    // A failed call is a transport problem, not a rejected signature - and only the
+    // latter should read as WebhookVerificationError.
     await expect(gateway().verifyWebhook({ rawBody: body, headers })).rejects.toBeInstanceOf(
-      WebhookVerificationError,
+      GatewayError,
     );
   });
 

@@ -174,7 +174,7 @@ class PaypalGateway implements SupportsCheckout, SupportsRefunds, SupportsWebhoo
       return result;
     } catch (error) {
       if (!this.isAlreadyCaptured(error)) {
-        throw this.wrap(error);
+        this.rethrow(error);
       }
 
       const { result } = await this.call(() => this.orders.getOrder({ id: orderId }));
@@ -182,11 +182,25 @@ class PaypalGateway implements SupportsCheckout, SupportsRefunds, SupportsWebhoo
     }
   }
 
-  /** PayPal reports a repeat capture as 422 with an ORDER_ALREADY_CAPTURED issue. */
+  /**
+   * PayPal reports a repeat capture as 422 with an ORDER_ALREADY_CAPTURED issue.
+   *
+   * The `issue` field is compared rather than substring-matching the body: the string
+   * can appear in a description or an echoed debug id, and a false positive here would
+   * silently turn a genuine failure into a read-back of an unrelated capture.
+   */
   protected isAlreadyCaptured(error: unknown): boolean {
     if (!(error instanceof ApiError) || error.statusCode !== 422) return false;
+    if (typeof error.body !== 'string') return false;
 
-    return typeof error.body === 'string' && error.body.includes('ORDER_ALREADY_CAPTURED');
+    let parsed: { details?: { issue?: string }[] };
+    try {
+      parsed = JSON.parse(error.body) as typeof parsed;
+    } catch {
+      return false;
+    }
+
+    return parsed.details?.some((detail) => detail.issue === 'ORDER_ALREADY_CAPTURED') ?? false;
   }
 
   async refund(request: RefundRequest): Promise<RefundResult> {
@@ -239,8 +253,26 @@ class PaypalGateway implements SupportsCheckout, SupportsRefunds, SupportsWebhoo
 
     // The SDK exposes no webhooks controller, so this borrows a token for the one
     // call it cannot make.
+    // Fetched outside the retry: a 401 from the token endpoint means the credentials
+    // themselves are rejected, and asking for another token would fail identically.
     const token = await this.accessToken();
-    return verifyPaypalWebhook(this.options, request, token);
+
+    try {
+      return await verifyPaypalWebhook(this.options, request, token);
+    } catch (error) {
+      // A cached token can be revoked before it expires, or the credentials behind it
+      // rotated. Without this, verification keeps failing until the cached expiry
+      // passes. Retried once only, so genuinely bad credentials still fail fast.
+      if (!this.isUnauthorized(error)) throw error;
+
+      this.cachedToken = undefined;
+      return verifyPaypalWebhook(this.options, request, await this.accessToken());
+    }
+  }
+
+  /** A 401 means the token was rejected, not that the signature was bad. */
+  protected isUnauthorized(error: unknown): boolean {
+    return error instanceof GatewayError && error.status === 401;
   }
 
   /**
@@ -306,21 +338,22 @@ class PaypalGateway implements SupportsCheckout, SupportsRefunds, SupportsWebhoo
     try {
       return await operation();
     } catch (error) {
-      throw this.wrap(error);
+      this.rethrow(error);
     }
   }
 
   /**
-   * Convert a provider error into the PaymentError family, leaving anything else alone.
+   * Rethrow a provider error as the PaymentError family, passing anything else through.
    *
-   * Shared by `call` and the already-captured path so both apply the same rule.
+   * Returns `never` so call sites read as terminal and the compiler knows control does
+   * not continue past them.
    */
-  protected wrap(error: unknown): unknown {
+  protected rethrow(error: unknown): never {
     if (error instanceof ApiError) {
       // `error.message` is safe. The response body echoes the request back and is dropped.
-      return new GatewayError(GATEWAY_ID, error.message, error.statusCode);
+      throw new GatewayError(GATEWAY_ID, error.message, error.statusCode);
     }
-    return error;
+    throw error;
   }
 }
 
