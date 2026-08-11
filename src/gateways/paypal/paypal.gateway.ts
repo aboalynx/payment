@@ -9,7 +9,12 @@ import {
   PaypalExperienceUserAction,
   RefundStatus,
 } from '@paypal/paypal-server-sdk';
-import type { Capability, SupportsCheckout, SupportsRefunds } from '../../capabilities';
+import type {
+  Capability,
+  SupportsCheckout,
+  SupportsRefunds,
+  SupportsWebhooks,
+} from '../../capabilities';
 import { ConfigurationError, GatewayError } from '../../errors';
 import { toDecimalString } from '../../money';
 import type {
@@ -19,9 +24,12 @@ import type {
   CheckoutResult,
   RefundRequest,
   RefundResult,
+  WebhookEvent,
+  WebhookRequest,
 } from '../../types';
 import { PAYPAL_CURRENCIES } from './paypal.currencies';
-import type { PaypalOptions } from './paypal.options';
+import { paypalApiBase, type PaypalOptions } from './paypal.options';
+import { verifyPaypalWebhook } from './paypal.webhooks';
 
 const GATEWAY_ID = 'paypal';
 
@@ -32,10 +40,14 @@ const GATEWAY_ID = 'paypal';
  * `{ value: "49.90", currencyCode: "USD" }`. That is a genuine difference from Stripe,
  * not an oversight.
  */
-class PaypalGateway implements SupportsCheckout, SupportsRefunds {
+class PaypalGateway implements SupportsCheckout, SupportsRefunds, SupportsWebhooks {
   readonly id = GATEWAY_ID;
 
-  readonly capabilities: ReadonlySet<Capability> = new Set<Capability>(['checkout', 'refund']);
+  readonly capabilities: ReadonlySet<Capability> = new Set<Capability>([
+    'checkout',
+    'refund',
+    'webhooks',
+  ]);
 
   readonly currencies: ReadonlySet<string> | null = PAYPAL_CURRENCIES;
 
@@ -152,6 +164,47 @@ class PaypalGateway implements SupportsCheckout, SupportsRefunds {
             ? 'failed'
             : 'pending',
     };
+  }
+
+  async verifyWebhook(request: WebhookRequest): Promise<WebhookEvent> {
+    // Checked before the token exchange: a missing webhookId is a configuration
+    // mistake, and spending a network round-trip to discover it would both waste the
+    // call and report the wrong error.
+    if (!this.options.webhookId) {
+      throw new ConfigurationError(GATEWAY_ID, 'webhookId is required to verify webhooks');
+    }
+
+    // The SDK exposes no webhooks controller, so this borrows a token for the one
+    // call it cannot make.
+    const token = await this.accessToken();
+    return verifyPaypalWebhook(this.options, request, token);
+  }
+
+  /** Obtain a client-credentials token for the calls the SDK does not cover. */
+  protected async accessToken(): Promise<string> {
+    const credentials = Buffer.from(
+      `${this.options.clientId}:${this.options.clientSecret}`,
+    ).toString('base64');
+
+    const response = await fetch(`${paypalApiBase(this.options.environment)}/v1/oauth2/token`, {
+      method: 'POST',
+      headers: {
+        authorization: `Basic ${credentials}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'grant_type=client_credentials',
+    });
+
+    if (!response.ok) {
+      throw new GatewayError(GATEWAY_ID, 'could not obtain an access token', response.status);
+    }
+
+    const body = (await response.json()) as { access_token?: string };
+    if (!body.access_token) {
+      throw new GatewayError(GATEWAY_ID, 'token response contained no access_token');
+    }
+
+    return body.access_token;
   }
 
   protected assertCurrency(currency: string): void {
