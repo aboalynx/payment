@@ -28,23 +28,6 @@ describe('stripe gateway error paths', () => {
     ).rejects.toThrow(/checkout url/);
   });
 
-  it('falls back to the session id when no payment intent is present', async () => {
-    const fake = new FakeStripeHttp().stub('/v1/checkout/sessions/cs_1', {
-      id: 'cs_1',
-      object: 'checkout.session',
-      payment_status: 'paid',
-      amount_total: 1000,
-      currency: 'usd',
-    });
-
-    const result = await createStripeGateway({
-      apiKey: 'sk_test',
-      httpClient: fake.build(),
-    }).capture({ sessionId: 'cs_1' });
-
-    expect(result).toMatchObject({ status: 'paid', transactionId: 'cs_1' });
-  });
-
   it('reports a Stripe authentication failure as a GatewayError with its status', async () => {
     const fake = new FakeStripeHttp().stub(
       '/v1/checkout/sessions',
@@ -92,5 +75,41 @@ describe('stripe gateway error paths', () => {
         currency: 'XYZ',
       }),
     ).rejects.toBeInstanceOf(GatewayError);
+  });
+});
+
+describe('stripe capture missing-field failures', () => {
+  function paidSessionWithout(missing: Record<string, unknown>) {
+    return new FakeStripeHttp().stub('/v1/checkout/sessions/cs_1', {
+      id: 'cs_1',
+      object: 'checkout.session',
+      payment_status: 'paid',
+      payment_intent: 'pi_1',
+      amount_total: 1999,
+      currency: 'usd',
+      ...missing,
+    });
+  }
+
+  function capture(fake: FakeStripeHttp) {
+    return createStripeGateway({ apiKey: 'sk_test', httpClient: fake.build() }).capture({
+      sessionId: 'cs_1',
+    });
+  }
+
+  // Returning the session id here would hand the caller a transactionId that refund()
+  // cannot use, failing far from the cause.
+  it('fails rather than substituting the session id for a missing payment intent', async () => {
+    await expect(capture(paidSessionWithout({ payment_intent: null }))).rejects.toThrow(
+      /no payment intent/,
+    );
+  });
+
+  it('fails rather than defaulting a missing currency to USD', async () => {
+    await expect(capture(paidSessionWithout({ currency: null }))).rejects.toThrow(/no currency/);
+  });
+
+  it('fails rather than treating a missing total as zero', async () => {
+    await expect(capture(paidSessionWithout({ amount_total: null }))).rejects.toThrow(/no total/);
   });
 });

@@ -92,17 +92,41 @@ class StripeGateway implements SupportsCheckout, SupportsRefunds, SupportsWebhoo
       return { status: 'pending', gateway: GATEWAY_ID, sessionId: request.sessionId };
     }
 
-    const currency = (session.currency ?? 'usd').toUpperCase();
+    // A paid session must carry a payment intent and a currency. Substituting the
+    // session id or a default currency here would hand the caller a transactionId that
+    // refund() cannot use, and an amount denominated in the wrong currency - both of
+    // which surface far from the cause.
+    const transactionId =
+      typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : session.payment_intent?.id;
+
+    if (!transactionId) {
+      throw new GatewayError(
+        GATEWAY_ID,
+        `Session ${request.sessionId} is paid but carries no payment intent`,
+      );
+    }
+
+    if (!session.currency) {
+      throw new GatewayError(
+        GATEWAY_ID,
+        `Session ${request.sessionId} is paid but has no currency`,
+      );
+    }
+
+    if (session.amount_total === null || session.amount_total === undefined) {
+      throw new GatewayError(GATEWAY_ID, `Session ${request.sessionId} is paid but has no total`);
+    }
+
+    const currency = session.currency.toUpperCase();
 
     return {
       status: 'paid',
       gateway: GATEWAY_ID,
       sessionId: request.sessionId,
-      transactionId:
-        typeof session.payment_intent === 'string'
-          ? session.payment_intent
-          : (session.payment_intent?.id ?? request.sessionId),
-      amount: toMajorUnit(session.amount_total ?? 0, currency),
+      transactionId,
+      amount: toMajorUnit(session.amount_total, currency),
       currency,
       ...(session.client_reference_id ? { reference: session.client_reference_id } : {}),
     };
