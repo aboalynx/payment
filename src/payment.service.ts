@@ -113,7 +113,9 @@ export class PaymentService {
             name: 'payment.failed',
             gateway: gatewayId,
             sessionId: request.sessionId,
-            reason: result.status,
+            // The failed variant carries the provider's own explanation; only the
+            // pending variant has nothing better than its status to report.
+            reason: result.status === 'failed' ? result.reason : result.status,
           },
     );
 
