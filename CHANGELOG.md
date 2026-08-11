@@ -21,6 +21,19 @@ existing ones:
 
 ---
 
+## [0.1.1] - 2026-08-11
+
+### Added
+
+- An `exports` map, so the public surface is what `index.ts` exports rather than
+  anything reachable under `dist/`.
+
+### Changed
+
+- `prepack` now cleans `dist` before building, so a renamed or deleted source file
+  cannot leave stale output in the tarball.
+- Publishing moved to a release-triggered GitHub Actions job with `--provenance`.
+
 ## [0.1.0] - 2026-08-11
 
 First release. Checkout, capture, refund and webhook verification working identically

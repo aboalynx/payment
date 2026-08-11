@@ -40,10 +40,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: '20'
           cache: npm
 
       - run: npm ci
+
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
@@ -65,10 +66,10 @@ jobs:
       contents: read
       id-token: write
 
-    # GitHub creates this on first run. It is referenced so required reviewers or a wait
-    # timer can be added later in repo settings without touching this file - worth having
-    # on a step that cannot be undone.
-    environment: npm
+    # # GitHub creates this on first run. It is referenced so required reviewers or a wait
+    # # timer can be added later in repo settings without touching this file - worth having
+    # # on a step that cannot be undone.
+    # environment: npm
 
     steps:
       - uses: actions/checkout@v4
@@ -80,8 +81,18 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-          # Writes the registry into .npmrc so NODE_AUTH_TOKEN is picked up on publish.
-          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing needs npm >= 11.5.1 and Node 20 ships npm 10. This has to be
+      # in the job that runs `npm publish`, not the test job.
+      - name: Upgrade npm for Trusted Publishing
+        run: |
+          npm install -g npm@11
+          npm -v
+
+      # Trusted Publishing authenticates over OIDC. Any leftover .npmrc auth line would
+      # take precedence and send npm down the token path instead.
+      - name: Remove any placeholder auth config
+        run: rm -f .npmrc ~/.npmrc
 
       - run: npm ci
 
@@ -125,5 +136,3 @@ jobs:
         # and workflow that produced it, verifiable with `npm audit signatures`. Access
         # is already public via publishConfig.
         run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

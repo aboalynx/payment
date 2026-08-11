@@ -1,6 +1,6 @@
 {
   "name": "@aboalynx/payment",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Gateway-agnostic payment processing for NestJS. One interface for Stripe and PayPal, designed to be extended.",
   "license": "MIT",
   "author": "Mohamed Abdelbary",
@@ -39,7 +39,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "clean": "rm -rf dist",
