@@ -1,13 +1,37 @@
 {
   "name": "@aboalynx/payment",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Gateway-agnostic payment processing for NestJS. One interface for Stripe and PayPal, designed to be extended.",
   "license": "MIT",
+  "author": "Mohamed Abdelbary",
+  "homepage": "https://github.com/aboalynx/payment#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aboalynx/payment.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aboalynx/payment/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "payment",
+    "payments",
+    "payment-gateway",
+    "stripe",
+    "paypal",
+    "checkout",
+    "refund",
+    "webhooks",
+    "typescript"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20"
   },

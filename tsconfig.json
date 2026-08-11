@@ -16,5 +16,5 @@
     "emitDecoratorMetadata": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*", "test/**/*", "jest.config.ts"]
+  "include": ["src/**/*", "test/**/*"]
 }
