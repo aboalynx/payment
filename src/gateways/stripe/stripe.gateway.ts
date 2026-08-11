@@ -1,8 +1,22 @@
 import Stripe from 'stripe';
-import type { Capability, SupportsCheckout } from '../../capabilities';
-import { ConfigurationError, GatewayError } from '../../errors';
+import type {
+  Capability,
+  SupportsCheckout,
+  SupportsRefunds,
+  SupportsWebhooks,
+} from '../../capabilities';
+import { ConfigurationError, GatewayError, WebhookVerificationError } from '../../errors';
 import { toMajorUnit, toMinorUnit } from '../../money';
-import type { CaptureRequest, CaptureResult, CheckoutRequest, CheckoutResult } from '../../types';
+import type {
+  CaptureRequest,
+  CaptureResult,
+  CheckoutRequest,
+  CheckoutResult,
+  RefundRequest,
+  RefundResult,
+  WebhookEvent,
+  WebhookRequest,
+} from '../../types';
 import { STRIPE_CURRENCIES } from './stripe.currencies';
 import type { StripeOptions } from './stripe.options';
 
@@ -15,10 +29,14 @@ const GATEWAY_ID = 'stripe';
  * Nothing here reads a process-global, so two gateways serving different tenants in one
  * process cannot transact through each other's account.
  */
-class StripeGateway implements SupportsCheckout {
+class StripeGateway implements SupportsCheckout, SupportsRefunds, SupportsWebhooks {
   readonly id = GATEWAY_ID;
 
-  readonly capabilities: ReadonlySet<Capability> = new Set<Capability>(['checkout']);
+  readonly capabilities: ReadonlySet<Capability> = new Set<Capability>([
+    'checkout',
+    'refund',
+    'webhooks',
+  ]);
 
   readonly currencies: ReadonlySet<string> | null = STRIPE_CURRENCIES;
 
@@ -88,6 +106,81 @@ class StripeGateway implements SupportsCheckout {
       currency,
       ...(session.client_reference_id ? { reference: session.client_reference_id } : {}),
     };
+  }
+
+  async refund(request: RefundRequest): Promise<RefundResult> {
+    const refund = await this.call(() =>
+      this.client.refunds.create({
+        payment_intent: request.transactionId,
+        // Omitting `amount` tells Stripe to refund in full.
+        ...(request.amount === undefined
+          ? {}
+          : { amount: toMinorUnit(request.amount, request.currency) }),
+      }),
+    );
+
+    const currency = (refund.currency || request.currency).toUpperCase();
+
+    return {
+      gateway: GATEWAY_ID,
+      refundId: refund.id,
+      amount: toMajorUnit(refund.amount, currency),
+      currency,
+      status:
+        refund.status === 'succeeded'
+          ? 'succeeded'
+          : refund.status === 'failed'
+            ? 'failed'
+            : 'pending',
+    };
+  }
+
+  // Async so that every failure surfaces as a rejected promise rather than a
+  // synchronous throw. Callers should only ever need one error path.
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async verifyWebhook(request: WebhookRequest): Promise<WebhookEvent> {
+    const secret = this.options.webhookSecret;
+    if (!secret) {
+      throw new ConfigurationError(GATEWAY_ID, 'webhookSecret is required to verify webhooks');
+    }
+
+    const raw = request.headers['stripe-signature'];
+    const signature = Array.isArray(raw) ? raw[0] : raw;
+    if (!signature) {
+      throw new WebhookVerificationError(GATEWAY_ID, 'missing Stripe-Signature header');
+    }
+
+    try {
+      // constructEvent does the timing-safe compare and the timestamp tolerance check.
+      // Reimplementing either is how signature verification gets subtly wrong.
+      const event = this.client.webhooks.constructEvent(
+        request.rawBody,
+        signature,
+        secret,
+        this.options.webhookTolerance,
+      );
+
+      const object = event.data.object as {
+        id?: string;
+        client_reference_id?: string;
+        metadata?: Record<string, string>;
+      };
+      const reference = object.client_reference_id ?? object.metadata?.['reference'];
+
+      return {
+        gateway: GATEWAY_ID,
+        type: event.type,
+        id: event.id,
+        ...(object.id ? { sessionId: object.id } : {}),
+        ...(reference ? { reference } : {}),
+        payload: event,
+      };
+    } catch (error) {
+      throw new WebhookVerificationError(
+        GATEWAY_ID,
+        error instanceof Error ? error.message : 'signature verification failed',
+      );
+    }
   }
 
   protected assertCurrency(currency: string): void {
