@@ -5,6 +5,24 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Publishing is driven by GitHub Releases rather than tag pushes, so the release notes
+  # and the published version can never describe different code.
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to npm (only if the tag matches package.json)'
+        type: boolean
+        default: false
+      tag:
+        description: 'Tag to publish, e.g. v0.1.0'
+        required: false
+
+# Read-only by default. The publish job widens this for itself and nothing else, so a
+# push or a pull request - including from a fork - never runs with token-minting rights.
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -31,3 +49,81 @@ jobs:
       - run: npm run format:check
       - run: npm test -- --coverage
       - run: npm run build
+
+  publish:
+    name: Publish to npm
+    needs: test
+    # Never on push or pull_request. A release, or a manual run that explicitly opts in.
+    if: >-
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+
+    # Scoped here rather than at workflow level: id-token lets the job mint a signing
+    # token, and only this job should ever be able to.
+    permissions:
+      contents: read
+      id-token: write
+
+    # GitHub creates this on first run. It is referenced so required reviewers or a wait
+    # timer can be added later in repo settings without touching this file - worth having
+    # on a step that cannot be undone.
+    environment: npm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # On a manual run this publishes the tag given, not whatever main happens to be.
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          # Writes the registry into .npmrc so NODE_AUTH_TOKEN is picked up on publish.
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+
+      # The tag and package.json are edited by different hands at different times. A
+      # mismatch means the release notes describe one version and npm receives another,
+      # which cannot be undone once published.
+      - name: Verify the tag matches package.json
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          PKG="v$(node -p "require('./package.json').version")"
+          echo "tag=$TAG  package.json=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag $TAG does not match package.json $PKG"
+            exit 1
+          fi
+
+      # The matrix above ran against the branch. This re-runs the gate against the exact
+      # ref being shipped, because publishing is irreversible after 72 hours.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test -- --coverage
+      - run: npm run build
+
+      # Catches the failure this package already had once: files is ["dist"], dist is
+      # gitignored, and without a build hook the tarball ships with no code at all.
+      - name: Verify the tarball contains the build output
+        run: |
+          npm pack --silent
+          TARBALL=$(ls ./*.tgz)
+          echo "Contents of $TARBALL:"
+          tar -tzf "$TARBALL" | sed 's/^/  /'
+          if ! tar -tzf "$TARBALL" | grep -q '^package/dist/index.js$'; then
+            echo "::error::dist/index.js is missing from the tarball"
+            exit 1
+          fi
+          rm -f "$TARBALL"
+
+      - name: Publish
+        # --provenance publishes a signed attestation tying this tarball to the commit
+        # and workflow that produced it, verifiable with `npm audit signatures`. Access
+        # is already public via publishConfig.
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -35,9 +35,16 @@
   "engines": {
     "node": ">=20"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
+    "clean": "rm -rf dist",
     "build": "tsc -p tsconfig.build.json",
-    "prepack": "npm run build",
+    "prepack": "npm run clean && npm run build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
