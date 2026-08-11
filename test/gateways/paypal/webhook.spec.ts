@@ -134,3 +134,67 @@ describe('paypal webhook verification', () => {
     ).rejects.toBeInstanceOf(ConfigurationError);
   });
 });
+
+describe('paypal token caching', () => {
+  const ok = { verification_status: 'SUCCESS' };
+
+  // Without caching every verification costs two round-trips, which under a burst is
+  // latency plus avoidable pressure on PayPal's rate limits.
+  it('reuses the token across verifications', async () => {
+    nock(API)
+      .post('/v1/oauth2/token')
+      .once() // once() is the assertion: a second exchange would 404 on a stray request
+      .reply(200, { access_token: 'tok_1', token_type: 'Bearer', expires_in: 32400 });
+    nock(API).post('/v1/notifications/verify-webhook-signature').twice().reply(200, ok);
+
+    const gw = gateway();
+    await gw.verifyWebhook({ rawBody: body, headers });
+    await gw.verifyWebhook({ rawBody: body, headers });
+
+    expect(nock.isDone()).toBe(true);
+  });
+
+  it('coalesces concurrent verifications onto one token exchange', async () => {
+    nock(API)
+      .post('/v1/oauth2/token')
+      .once()
+      .reply(200, { access_token: 'tok_1', token_type: 'Bearer', expires_in: 32400 });
+    nock(API).post('/v1/notifications/verify-webhook-signature').times(3).reply(200, ok);
+
+    const gw = gateway();
+    await Promise.all([
+      gw.verifyWebhook({ rawBody: body, headers }),
+      gw.verifyWebhook({ rawBody: body, headers }),
+      gw.verifyWebhook({ rawBody: body, headers }),
+    ]);
+
+    expect(nock.isDone()).toBe(true);
+  });
+
+  it('does not cache a token across gateway instances', async () => {
+    nock(API)
+      .post('/v1/oauth2/token')
+      .twice()
+      .reply(200, { access_token: 'tok', token_type: 'Bearer', expires_in: 32400 });
+    nock(API).post('/v1/notifications/verify-webhook-signature').twice().reply(200, ok);
+
+    await gateway().verifyWebhook({ rawBody: body, headers });
+    await gateway().verifyWebhook({ rawBody: body, headers });
+
+    expect(nock.isDone()).toBe(true);
+  });
+
+  it('rejects a verified event with no id, which would break idempotency', async () => {
+    nock(API)
+      .post('/v1/oauth2/token')
+      .reply(200, { access_token: 'tok', token_type: 'Bearer', expires_in: 32400 });
+    nock(API).post('/v1/notifications/verify-webhook-signature').reply(200, ok);
+
+    await expect(
+      gateway().verifyWebhook({
+        rawBody: JSON.stringify({ event_type: 'X', resource: { id: 'ORDER-1' } }),
+        headers,
+      }),
+    ).rejects.toThrow(/no id/);
+  });
+});

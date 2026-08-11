@@ -193,3 +193,99 @@ describe('paypal refund', () => {
     expect((sent as { amount: { value: string } }).amount.value).toBe('5.00');
   });
 });
+
+describe('paypal capture idempotency', () => {
+  const completedOrder = {
+    id: 'ORDER-1',
+    status: 'COMPLETED',
+    purchase_units: [
+      {
+        reference_id: 'ref-1',
+        payments: {
+          captures: [
+            {
+              id: 'CAPTURE-1',
+              status: 'COMPLETED',
+              amount: { value: '49.90', currency_code: 'USD' },
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  // Stripe's capture is a repeatable status read; PayPal's moves money and rejects a
+  // second call. Without the read-back the same call would mean two different things.
+  it('reads back the existing capture when the order was already captured', async () => {
+    mockToken();
+    nock(API)
+      .post('/v2/checkout/orders/ORDER-1/capture')
+      .reply(422, {
+        name: 'UNPROCESSABLE_ENTITY',
+        details: [{ issue: 'ORDER_ALREADY_CAPTURED' }],
+      });
+    nock(API).get('/v2/checkout/orders/ORDER-1').reply(200, completedOrder);
+
+    expect(await gateway().capture({ sessionId: 'ORDER-1' })).toEqual({
+      status: 'paid',
+      gateway: 'paypal',
+      sessionId: 'ORDER-1',
+      transactionId: 'CAPTURE-1',
+      amount: 49.9,
+      currency: 'USD',
+      reference: 'ref-1',
+    });
+  });
+
+  it('does not swallow other 422s as already-captured', async () => {
+    mockToken();
+    nock(API)
+      .post('/v2/checkout/orders/ORDER-1/capture')
+      .reply(422, { name: 'UNPROCESSABLE_ENTITY', details: [{ issue: 'INSTRUMENT_DECLINED' }] });
+
+    await expect(gateway().capture({ sessionId: 'ORDER-1' })).rejects.toBeInstanceOf(GatewayError);
+  });
+});
+
+describe('paypal missing-field failures', () => {
+  it('fails when a captured order carries no capture id', async () => {
+    mockToken();
+    nock(API)
+      .post('/v2/checkout/orders/ORDER-1/capture')
+      .reply(201, {
+        id: 'ORDER-1',
+        status: 'COMPLETED',
+        purchase_units: [
+          {
+            payments: {
+              captures: [{ status: 'COMPLETED', amount: { value: '1.00', currency_code: 'USD' } }],
+            },
+          },
+        ],
+      });
+
+    await expect(gateway().capture({ sessionId: 'ORDER-1' })).rejects.toThrow(/no capture id/);
+  });
+
+  it('fails when a capture carries no currency rather than assuming USD', async () => {
+    mockToken();
+    nock(API)
+      .post('/v2/checkout/orders/ORDER-1/capture')
+      .reply(201, {
+        id: 'ORDER-1',
+        status: 'COMPLETED',
+        purchase_units: [{ payments: { captures: [{ id: 'CAPTURE-1', status: 'COMPLETED' }] } }],
+      });
+
+    await expect(gateway().capture({ sessionId: 'ORDER-1' })).rejects.toThrow(/amount or currency/);
+  });
+
+  it('fails when checkout returns an order with no id', async () => {
+    mockToken();
+    nock(API)
+      .post('/v2/checkout/orders')
+      .reply(201, { links: [{ rel: 'payer-action', href: 'https://x' }] });
+
+    await expect(gateway().checkout(request)).rejects.toThrow(/no id/);
+  });
+});

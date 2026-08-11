@@ -83,10 +83,21 @@ export async function verifyPaypalWebhook(
     throw new WebhookVerificationError(GATEWAY_ID, 'PayPal reported the signature as invalid');
   }
 
+  // Applications use `id` to deduplicate retried deliveries. An empty string would
+  // make every event look like the same event, so a verified payload without one is a
+  // hard failure rather than something to paper over.
+  if (!parsed.id) {
+    throw new WebhookVerificationError(GATEWAY_ID, 'verified event carries no id');
+  }
+
+  if (!parsed.event_type) {
+    throw new WebhookVerificationError(GATEWAY_ID, 'verified event carries no event_type');
+  }
+
   return {
     gateway: GATEWAY_ID,
-    type: parsed.event_type ?? 'unknown',
-    id: parsed.id ?? '',
+    type: parsed.event_type,
+    id: parsed.id,
     ...(parsed.resource?.id ? { sessionId: parsed.resource.id } : {}),
     payload: parsed,
   };
