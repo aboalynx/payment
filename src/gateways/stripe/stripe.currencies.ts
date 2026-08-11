@@ -1,0 +1,42 @@
+/**
+ * Stripe's presentment currencies, limited to the set this package validates against.
+ *
+ * Validating locally means an unsupported currency fails before a network round-trip,
+ * with a clear error rather than a provider 400.
+ */
+export const STRIPE_CURRENCIES: ReadonlySet<string> = new Set([
+  'AED',
+  'AUD',
+  'BGN',
+  'BRL',
+  'CAD',
+  'CHF',
+  'CNY',
+  'CZK',
+  'DKK',
+  'EGP',
+  'EUR',
+  'GBP',
+  'HKD',
+  'HUF',
+  'IDR',
+  'ILS',
+  'INR',
+  'JPY',
+  'KRW',
+  'KWD',
+  'MXN',
+  'MYR',
+  'NOK',
+  'NZD',
+  'PHP',
+  'PLN',
+  'RON',
+  'SAR',
+  'SEK',
+  'SGD',
+  'THB',
+  'TRY',
+  'USD',
+  'ZAR',
+]);
