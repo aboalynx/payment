@@ -1,0 +1,26 @@
+import tseslint from 'typescript-eslint';
+
+export default tseslint.config(
+  { ignores: ['dist/**', 'coverage/**', 'node_modules/**'] },
+  ...tseslint.configs.recommendedTypeChecked,
+  {
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: {
+      '@typescript-eslint/explicit-module-boundary-types': 'error',
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/consistent-type-imports': 'error',
+    },
+  },
+  {
+    files: ['test/**/*.ts'],
+    rules: { '@typescript-eslint/no-unsafe-assignment': 'off' },
+  },
+  // This config file is plain JS and is not part of the TypeScript project, so the
+  // type-aware rules cannot resolve it.
+  {
+    files: ['**/*.mjs'],
+    ...tseslint.configs.disableTypeChecked,
+  },
+);
