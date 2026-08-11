@@ -2,6 +2,8 @@
 
 Gateway-agnostic payment processing for NestJS. One interface for Stripe and PayPal, designed to be extended.
 
+[![npm](https://img.shields.io/npm/v/@aboalynx/payment)](https://www.npmjs.com/package/@aboalynx/payment)
+[![CI](https://github.com/aboalynx/payment/actions/workflows/ci.yml/badge.svg)](https://github.com/aboalynx/payment/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-339933.svg)](package.json)
 [![NestJS](https://img.shields.io/badge/nestjs-10%20%7C%2011-e0234e.svg)](package.json)
@@ -23,6 +25,9 @@ Adding a provider means implementing the capability interfaces it supports and p
 shared contract suite. Calling code does not change.
 
 ## Install
+
+Published from CI with [build provenance](https://www.npmjs.com/package/@aboalynx/payment) —
+the tarball is cryptographically tied to the commit and workflow that built it.
 
 ```bash
 npm install @aboalynx/payment
